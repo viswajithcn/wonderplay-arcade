@@ -31,6 +31,28 @@ class LaserGate {
     return speed > maxSpeed ? maxSpeed : speed;
   }
 
+  /// Returns the 1-indexed speed tier that increases every 10 rounds (0-9 -> Lv 1, 10-19 -> Lv 2, etc.).
+  static int speedTierForScore(int score) {
+    final safeScore = score < 0 ? 0 : score;
+    return (safeScore ~/ 10) + 1;
+  }
+
+  /// Calculates progressive gate speed with a noticeable step-up every 10 rounds,
+  /// plus smooth per-round scaling up to maxSpeed.
+  static double calculateProgressiveSpeed(
+    int score, {
+    double baseSpeed = 180.0,
+    double tierStepBoost = 45.0,
+    double perRoundBoost = 2.5,
+    double maxSpeed = 520.0,
+  }) {
+    final safeScore = score < 0 ? 0 : score;
+    final tierIndex = safeScore ~/ 10;
+    final speed =
+        baseSpeed + (tierIndex * tierStepBoost) + (safeScore * perRoundBoost);
+    return speed > maxSpeed ? maxSpeed : speed;
+  }
+
   /// Advances the gate position based on delta time (seconds).
   void update(double dt) {
     y += speed * dt;

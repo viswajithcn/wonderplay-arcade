@@ -100,6 +100,7 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
   @override
   void dispose() {
     _flashTimer?.cancel();
+    _speedUpBannerTimer?.cancel();
     _gameLoopController.removeListener(_onGameLoopTick);
     _gameLoopController.stop();
     _gameLoopController.dispose();
@@ -154,14 +155,29 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
     }
   }
 
+  Timer? _speedUpBannerTimer;
+  String? _speedUpBannerText;
+
+  int get speedTier => LaserGate.speedTierForScore(_score);
+
+  double _getBaseSpeedForDifficulty() {
+    return switch (widget.difficulty) {
+      GameDifficulty.easy => 160.0,
+      GameDifficulty.medium => 180.0,
+      GameDifficulty.hard => 200.0,
+    };
+  }
+
   double _getSpawnInterval() {
     final baseInterval = switch (widget.difficulty) {
-      GameDifficulty.easy => 2.3,
+      GameDifficulty.easy => 2.2,
       GameDifficulty.medium => 1.85,
       GameDifficulty.hard => 1.5,
     };
-    final scaled = baseInterval - (_score * 0.015);
-    return scaled.clamp(1.15, 2.6);
+    final tierIndex = _score ~/ 10;
+    // Step down spawn interval noticeably every 10 rounds + per-round tightening
+    final scaled = baseInterval - (tierIndex * 0.20) - (_score * 0.012);
+    return scaled.clamp(0.75, 2.5);
   }
 
   /// Spawns a new laser gate at the top of the track.
@@ -169,11 +185,9 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
     _gateCounter++;
     final assignedColor = color ?? _chooseNextGateColor();
     final gateSpeed = speed ??
-        LaserGate.calculateSpeed(
+        LaserGate.calculateProgressiveSpeed(
           _score,
-          baseSpeed: widget.difficulty == GameDifficulty.easy
-              ? 160.0
-              : (widget.difficulty == GameDifficulty.hard ? 200.0 : 180.0),
+          baseSpeed: _getBaseSpeedForDifficulty(),
         );
 
     final gate = LaserGate(
@@ -214,7 +228,23 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
           if (_score > _highScore) {
             _highScore = _score;
           }
-          AudioController().playCorrect();
+
+          // Every 10 rounds: boost speed tier and notify player!
+          if (_score > 0 && _score % 10 == 0) {
+            final newSpeed = LaserGate.calculateProgressiveSpeed(
+              _score,
+              baseSpeed: _getBaseSpeedForDifficulty(),
+            );
+            for (final activeGate in _gates) {
+              if (!activeGate.isPassed && activeGate.speed < newSpeed) {
+                activeGate.speed = newSpeed;
+              }
+            }
+            AudioController().playCelebrate();
+            _triggerSpeedUpBanner(speedTier);
+          } else {
+            AudioController().playCorrect();
+          }
           _triggerMatchFlash();
         } else {
           // Color Mismatch! Game Over!
@@ -223,6 +253,19 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
         }
       }
     }
+  }
+
+  void _triggerSpeedUpBanner(int newTier) {
+    if (!mounted) return;
+    _speedUpBannerTimer?.cancel();
+    setState(() {
+      _speedUpBannerText = '⚡ SPEED UP! LEVEL $newTier ⚡';
+    });
+    _speedUpBannerTimer = Timer(const Duration(milliseconds: 1600), () {
+      if (mounted) {
+        setState(() => _speedUpBannerText = null);
+      }
+    });
   }
 
   void _triggerMatchFlash() {
@@ -265,9 +308,11 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
   /// Restarts the game session.
   void restartGame() {
     _flashTimer?.cancel();
+    _speedUpBannerTimer?.cancel();
     if (!mounted) return;
     setState(() {
       _matchFlash = false;
+      _speedUpBannerText = null;
       _score = 0;
       _gates.clear();
       _isGameOver = false;
@@ -407,6 +452,44 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
                     // Top HUD
                     _buildTopHUD(),
 
+                    // 10-Round Speed Up Milestone Banner
+                    if (_speedUpBannerText != null && !_isGameOver)
+                      Positioned(
+                        top: 76.0,
+                        left: 16.0,
+                        right: 16.0,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18.0,
+                              vertical: 8.0,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFFF6D00), Color(0xFFFFD600)],
+                              ),
+                              borderRadius: BorderRadius.circular(24.0),
+                              border: Border.all(color: Colors.white, width: 2.0),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFFFFAB00).withValues(alpha: 0.6),
+                                  blurRadius: 16.0,
+                                  spreadRadius: 2.0,
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              _speedUpBannerText!,
+                              style: AppTheme.headingFont.copyWith(
+                                color: Colors.white,
+                                fontSize: 15.0,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
                     // Bottom helper prompt (visible during initial learning)
                     if (_score < 3 && !_isGameOver && !_isPaused)
                       Positioned(
@@ -514,44 +597,87 @@ class ColorSwitchCourierScreenState extends State<ColorSwitchCourierScreen>
             ),
           ),
 
-          // Score Badge
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 18.0,
-              vertical: 8.0,
-            ),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(24.0),
-              border: Border.all(
-                color: const Color(0xFFFFD54F),
-                width: 2.0,
+          // Score & Speed Level Badges
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16.0,
+                  vertical: 8.0,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(24.0),
+                  border: Border.all(
+                    color: const Color(0xFFFFD54F),
+                    width: 2.0,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFFD54F).withValues(alpha: 0.3),
+                      blurRadius: 10.0,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.star_rounded,
+                      color: Color(0xFFFFD54F),
+                      size: 24.0,
+                    ),
+                    const SizedBox(width: 6.0),
+                    Text(
+                      '$_score',
+                      style: AppTheme.gameFont.copyWith(
+                        color: Colors.white,
+                        fontSize: 22.0,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFFFD54F).withValues(alpha: 0.3),
-                  blurRadius: 10.0,
+              const SizedBox(width: 8.0),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12.0,
+                  vertical: 8.0,
                 ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.star_rounded,
-                  color: Color(0xFFFFD54F),
-                  size: 24.0,
-                ),
-                const SizedBox(width: 6.0),
-                Text(
-                  '$_score',
-                  style: AppTheme.gameFont.copyWith(
-                    color: Colors.white,
-                    fontSize: 22.0,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(20.0),
+                  border: Border.all(
+                    color: speedTier > 1
+                        ? const Color(0xFFFF9100)
+                        : const Color(0xFF38BDF8),
+                    width: 2.0,
                   ),
                 ),
-              ],
-            ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.bolt_rounded,
+                      color: speedTier > 1
+                          ? const Color(0xFFFFAB00)
+                          : const Color(0xFF38BDF8),
+                      size: 18.0,
+                    ),
+                    const SizedBox(width: 2.0),
+                    Text(
+                      'Lv.$speedTier',
+                      style: AppTheme.bodyFont.copyWith(
+                        color: Colors.white,
+                        fontSize: 13.0,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
 
           // Pause button
