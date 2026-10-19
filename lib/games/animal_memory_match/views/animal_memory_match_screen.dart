@@ -40,7 +40,6 @@ class _AnimalMemoryMatchScreenState extends State<AnimalMemoryMatchScreen> {
   late int _hearts;
   String? _encouragementMessage;
   Timer? _encouragementTimer;
-  final Set<String> _previouslySeenAnimals = {};
 
   late List<MemoryPlayer> _players;
   int _currentPlayerIndex = 0;
@@ -67,7 +66,6 @@ class _AnimalMemoryMatchScreenState extends State<AnimalMemoryMatchScreen> {
 
   void _setupCards() {
     _cards.clear();
-    _previouslySeenAnimals.clear();
     _firstSelected = null;
     _secondSelected = null;
     _matchedPairs = 0;
@@ -113,7 +111,8 @@ class _AnimalMemoryMatchScreenState extends State<AnimalMemoryMatchScreen> {
 
     if (card1.animal.name == card2.animal.name) {
       // Match found!
-      _previouslySeenAnimals.add(card1.animal.name);
+      card1.hasBeenSeen = true;
+      card2.hasBeenSeen = true;
       AudioController().playPop();
       AudioController().playCorrect();
 
@@ -152,6 +151,8 @@ class _AnimalMemoryMatchScreenState extends State<AnimalMemoryMatchScreen> {
     } else {
       if (_isMultiplayer) {
         // Pass & Play Multiplayer: No heart loss, turn passes to next player after reveal!
+        card1.hasBeenSeen = true;
+        card2.hasBeenSeen = true;
         final nextIndex = (_currentPlayerIndex + 1) % _players.length;
         final nextPlayer = _players[nextIndex];
         setState(() {
@@ -172,24 +173,32 @@ class _AnimalMemoryMatchScreenState extends State<AnimalMemoryMatchScreen> {
           });
         });
       } else {
-        // 1P Solo Mode: check if either animal was already seen in a previous turn
-        final animal1WasKnown = _previouslySeenAnimals.contains(card1.animal.name);
-        final animal2WasKnown = _previouslySeenAnimals.contains(card2.animal.name);
-        final isMemoryMistake = animal1WasKnown || animal2WasKnown;
+        // 1P Solo Mode: A mismatch is ONLY a memory mistake if:
+        // 1) The matching partner tile of card1 was ALREADY seen in a previous turn, OR
+        // 2) The second tile picked (card2) was ALREADY seen in a previous turn.
+        // If card2 is a brand-new unseen tile and card1's partner has never been seen,
+        // the player had no way of knowing what card2 was!
+        final card1Partner = _cards.firstWhere(
+          (c) => c.animal.name == card1.animal.name && c.id != card1.id,
+        );
+        final card1PartnerWasSeen = card1Partner.hasBeenSeen;
+        final card2WasAlreadySeen = card2.hasBeenSeen;
+        final isMemoryMistake = card1PartnerWasSeen || card2WasAlreadySeen;
 
-        // Remember both animals for future turns
-        _previouslySeenAnimals.add(card1.animal.name);
-        _previouslySeenAnimals.add(card2.animal.name);
+        // Mark both specific tiles as seen for future turns
+        card1.hasBeenSeen = true;
+        card2.hasBeenSeen = true;
 
         if (!isMemoryMistake) {
-          // Both animals were opened for the very first time: Free discovery! No heart lost!
+          // Fair exploration of unseen tiles: No heart lost!
           setState(() {
-            _showEncouragement('New animals found! Remember them 🔍');
+            _showEncouragement('New tiles explored! Remember them 🔍');
           });
         } else {
-          // An animal that was already revealed before was missed: Lose a heart!
+          // A specific tile or partner location that was already seen was missed: Lose a heart!
           AudioController().playWrong();
-          final missedAnimal = animal1WasKnown ? card1.animal.name : card2.animal.name;
+          final missedAnimal =
+              card1PartnerWasSeen ? card1.animal.name : card2.animal.name;
           setState(() {
             _streak = 0;
             _hearts--;
