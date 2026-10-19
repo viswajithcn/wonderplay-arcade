@@ -1,0 +1,46 @@
+name: Build & Upload Android Release APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build WonderPlay Arcade APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run static analysis
+        run: flutter analyze
+
+      - name: Build Release APK
+        run: flutter build apk --release
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wonderplay-arcade-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+          if-no-files-found: error
